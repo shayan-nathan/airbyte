@@ -3,11 +3,34 @@ from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
 import requests
 from airbyte_cdk.sources.streams.http import HttpStream
+# from airbyte_cdk.sources.utils.transform import TransformConfig, TypeTransformer
 
 
 class PendoPythonStream(HttpStream, ABC):
     url_base = "https://app.pendo.io/api/v1/"
     primary_key = "id"
+
+    # transformer = TypeTransformer(TransformConfig.CustomSchemaNormalization)
+
+    # def __init__(self, *args,  **kwargs):
+    #     super().__init__(*args, **kwargs)
+    #     transform_function = self.get_custom_transform()
+    #     self.transformer.registerCustomTransform(transform_function)
+
+    # @staticmethod
+    # def get_custom_transform():
+    #     def custom_transform_function(original_value, field_schema):
+    #         if original_value:
+    #             print("original_value: ", original_value)
+    #             print("field_schema: ", field_schema)
+    #             if not isinstance(original_value, dict):
+    #                 print("original value is not a dict")
+    #                 if "format" in field_schema and field_schema["format"] == "date-time":
+    #                     print("Converting to string: ", original_value)
+    #                     return str(original_value)
+    #         return original_value
+
+    #     return custom_transform_function
 
     def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
         return None
@@ -20,27 +43,27 @@ class PendoPythonStream(HttpStream, ABC):
     def parse_response(self, response: requests.Response, **kwargs) -> Iterable[Mapping]:
         yield from response.json()
 
-    def get_valid_type(self, field_type) -> str:
+    # Method to get an Airbyte field schema for a given Pendo field type
+    def get_valid_field_info(self, field_type) -> dict:
+        output = {}
         if field_type == 'time':
-            return 'integer'
-        if field_type == 'list':
-            return 'array'
-        return field_type
+            output["type"] = ["null", "integer"]
+        elif field_type == 'list':
+            output["type"] = ["null", "array"]
+        elif field_type == '':
+            output['type'] = ["null", "array", "string", "integer", "boolean"]
+        else:
+            output["type"] = ["null", field_type]
+        return output
 
+    # Build the Airbyte stream schema from Pendo metadata
     def build_schema(self, full_schema, metadata):
         for key in metadata:
             if not key.startswith("auto"):
                 fields = {}
                 for field in metadata[key]:
                     field_type = metadata[key][field]['Type']
-                    if field_type != '':
-                        fields[field] = {
-                            "type": ["null", self.get_valid_type(field_type)]
-                        }
-                    else:
-                        fields[field] = {
-                            "type": ["null", "array", "string", "integer", "boolean"]
-                        }
+                    fields[field] = self.get_valid_field_info(field_type)
 
                 full_schema['properties']['metadata']['properties'][key] = {
                     "type": ["null", "object"],
@@ -49,8 +72,9 @@ class PendoPythonStream(HttpStream, ABC):
         return full_schema
 
 
+# Airbyte Streams using the Pendo /aggregation endpoint (Currently only Account and Visitor)
 class PendoAggregationStream(PendoPythonStream):
-    json_schema = None
+    json_schema = None  # Field to store dynamically built Airbyte Stream Schema
     page_size = 10
 
     @property
@@ -81,6 +105,7 @@ class PendoAggregationStream(PendoPythonStream):
         """
         yield from response.json().get("results", [])
 
+    # Build /aggregation endpoint payload with pagination for a given source and requestId
     def build_request_body(self, requestId, source, next_page_token) -> Optional[Mapping[str, Any]]:
         request_body = {
             "response": {"mimeType": "application/json"},
@@ -171,7 +196,9 @@ class Visitors(PendoAggregationStream):
 
                 auto_fields = {
                     "lastupdated": {
-                        "type": ["null", "integer"]
+                        "type": ["null", "integer"],
+                        # "format": "date-time",
+                        # "airbyte_type": "timestamp_without_timezone"
                     },
                     "idhash": {
                         "type": ["null", "integer"]
@@ -184,9 +211,7 @@ class Visitors(PendoAggregationStream):
                     }
                 }
                 for key in body['auto']:
-                    auto_fields[key] = {
-                        "type": ["null", self.get_valid_type(body['auto'][key]['Type'])]
-                    }
+                    auto_fields[key] = self.get_valid_field_info(body['auto'][key]['Type'])
                 full_schema['properties']['metadata']['properties']['auto']['properties'] = auto_fields
                 full_schema['properties']['metadata']['properties']['auto__323232']['properties'] = auto_fields
 
@@ -231,16 +256,16 @@ class Accounts(PendoAggregationStream):
 
                 auto_fields = {
                     "lastupdated": {
-                        "type": ["null", "integer"]
+                        "type": ["null", "integer"],
+                        # "format": "date-time",
+                        # "airbyte_type": "timestamp_without_timezone"
                     },
                     "idhash": {
                         "type": ["null", "integer"]
                     }
                 }
                 for key in body['auto']:
-                    auto_fields[key] = {
-                        "type": ["null", self.get_valid_type(body['auto'][key]['Type'])]
-                    }
+                    auto_fields[key] = self.get_valid_field_info(body['auto'][key]['Type'])
                 full_schema['properties']['metadata']['properties']['auto']['properties'] = auto_fields
                 full_schema['properties']['metadata']['properties']['auto__323232']['properties'] = auto_fields
 
